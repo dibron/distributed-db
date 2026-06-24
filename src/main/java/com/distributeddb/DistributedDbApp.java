@@ -16,33 +16,33 @@ public class DistributedDbApp {
 
         Path walPath = Path.of("data", "wal", "wal.log");
         Path dataDir = Path.of("data", "sstables");
-        int flushThreshold = 5;  // flush after 5 keys (small for demo purposes)
+        int flushThreshold = 3;       // flush after 3 keys (small for demo)
+        int compactionThreshold = 3;  // compact after 3 SSTables
 
-        try (MemTableStorage storage = new MemTableStorage(walPath, dataDir, flushThreshold)) {
+        try (MemTableStorage storage = new MemTableStorage(walPath, dataDir, flushThreshold, compactionThreshold)) {
 
-            // Write some data — after 5 keys, the MemTable will flush to an SSTable!
+            // Flush 1: 3 keys → SSTable 1
             storage.put("apple", "red");
             storage.put("banana", "yellow");
             storage.put("cherry", "red");
+            log.info("After flush 1: {} SSTables", storage.sstableCount());
+
+            // Flush 2: 3 keys → SSTable 2
             storage.put("date", "brown");
-            log.info("MemTable size before flush: {}", storage.memTableSize());
-
             storage.put("elderberry", "purple");
-            // ^^^ This triggers the flush! MemTable had 5 entries → flushed to SSTable
-            log.info("MemTable size after flush: {}", storage.memTableSize());
-            log.info("SSTables on disk: {}", storage.sstableCount());
-
-            // Write more data (goes into the NEW empty MemTable)
             storage.put("fig", "green");
+            log.info("After flush 2: {} SSTables", storage.sstableCount());
+
+            // Flush 3: 3 keys → SSTable 3 → triggers compaction!
             storage.put("grape", "purple");
+            storage.put("honeydew", "green");
+            storage.put("apple", "GREEN");  // update apple!
+            log.info("After flush 3 + compaction: {} SSTables", storage.sstableCount());
 
-            // Read data — some from MemTable, some from SSTable
-            log.info("GET 'apple' = {} (from SSTable)", storage.get("apple").orElse("<not found>"));
-            log.info("GET 'fig' = {} (from MemTable)", storage.get("fig").orElse("<not found>"));
-
-            // Delete a key that's in the SSTable
-            storage.delete("apple");
-            log.info("GET 'apple' after delete = {}", storage.get("apple").orElse("<not found>"));
+            // All data readable from the one compacted SSTable
+            log.info("GET 'apple' = {} (was red, updated to GREEN)", storage.get("apple").orElse("<not found>"));
+            log.info("GET 'banana' = {}", storage.get("banana").orElse("<not found>"));
+            log.info("GET 'grape' = {}", storage.get("grape").orElse("<not found>"));
 
             log.info("Distributed DB stopped.");
         }

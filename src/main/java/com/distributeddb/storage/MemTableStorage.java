@@ -43,6 +43,9 @@ public class MemTableStorage implements StorageEngine, Closeable {
     // When the MemTable reaches this many keys, flush it to an SSTable
     private final int flushThreshold;
 
+    // When there are this many SSTables, compact them into one
+    private final int compactionThreshold;
+
     // Counter for naming SSTable files: sstable_0001.dat, sstable_0002.dat, etc.
     private int sstableCounter = 0;
 
@@ -59,9 +62,10 @@ public class MemTableStorage implements StorageEngine, Closeable {
      * @param dataDir        folder for SSTable files
      * @param flushThreshold flush MemTable after this many keys
      */
-    public MemTableStorage(Path walPath, Path dataDir, int flushThreshold) throws IOException {
+    public MemTableStorage(Path walPath, Path dataDir, int flushThreshold, int compactionThreshold) throws IOException {
         this.dataDir = dataDir;
         this.flushThreshold = flushThreshold;
+        this.compactionThreshold = compactionThreshold;
 
         // Load any existing SSTables from disk (from previous runs)
         loadExistingSSTables();
@@ -81,8 +85,12 @@ public class MemTableStorage implements StorageEngine, Closeable {
     /**
      * Create storage with just a WAL (no SSTables) — for backward compatibility.
      */
+    public MemTableStorage(Path walPath, Path dataDir, int flushThreshold) throws IOException {
+        this(walPath, dataDir, flushThreshold, 4);
+    }
+
     public MemTableStorage(Path walPath) throws IOException {
-        this(walPath, walPath.getParent().resolve("sstables"), 1000);
+        this(walPath, walPath.getParent().resolve("sstables"), 1000, 4);
     }
 
     /**
@@ -92,6 +100,7 @@ public class MemTableStorage implements StorageEngine, Closeable {
         this.wal = null;
         this.dataDir = null;
         this.flushThreshold = Integer.MAX_VALUE;
+        this.compactionThreshold = Integer.MAX_VALUE;
     }
 
     @Override
@@ -206,6 +215,37 @@ public class MemTableStorage implements StorageEngine, Closeable {
         }
 
         log.info("Flushed MemTable to {} ({} entries)", fileName, sstable.size());
+
+        // If there are too many SSTables, compact them into fewer
+        if (sstables.size() >= compactionThreshold) {
+            compactSSTables();
+        }
+    }
+
+    /**
+     * Merge ALL current SSTables into a single SSTable.
+     *
+     * WHAT HAPPENS:
+     * 1. Take all existing SSTables
+     * 2. Merge them into one (newer values win, tombstones removed)
+     * 3. Delete the old files
+     * 4. Replace our list with just the one merged SSTable
+     */
+    void compactSSTables() throws IOException {
+        if (sstables.size() < 2) {
+            return;
+        }
+
+        sstableCounter++;
+        String fileName = String.format("sstable_%04d.dat", sstableCounter);
+        Path outputPath = dataDir.resolve(fileName);
+
+        // Compact all SSTables into one
+        SSTable merged = Compaction.compact(sstables, outputPath);
+
+        // Replace our list with just the merged SSTable
+        sstables.clear();
+        sstables.add(merged);
     }
 
     /**

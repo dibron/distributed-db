@@ -49,6 +49,10 @@ public class SSTable {
     private final List<String> keys;
     private final List<String> values;
 
+    // Bloom filter — quick "is this key possibly here?" check
+    // Avoids expensive binary search when the key is definitely not in this SSTable
+    private final BloomFilter bloomFilter;
+
     /**
      * Load an existing SSTable from disk.
      * Reads the whole file into memory (keys + values lists).
@@ -71,6 +75,12 @@ public class SSTable {
             }
             log.info("Loaded SSTable {} with {} entries", filePath.getFileName(), keys.size());
         }
+
+        // Build the Bloom filter from all keys in this SSTable
+        this.bloomFilter = new BloomFilter(Math.max(keys.size(), 1));
+        for (String key : keys) {
+            bloomFilter.add(key);
+        }
     }
 
     /**
@@ -87,6 +97,13 @@ public class SSTable {
      * 1000 entries → ~10 steps. 1,000,000 entries → ~20 steps!
      */
     public Optional<String> get(String key) {
+        // STEP 1: Ask the Bloom filter first (instant, O(1))
+        // If it says "definitely not here", skip the expensive binary search
+        if (!bloomFilter.mightContain(key)) {
+            return Optional.empty();
+        }
+
+        // STEP 2: Bloom filter said "maybe here" — do the actual binary search
         int index = Collections.binarySearch(keys, key);
 
         if (index >= 0) {
